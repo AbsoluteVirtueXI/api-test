@@ -11,4 +11,9 @@ tokio = {version = "^0.2", features = ["full"]}
 warp = "^0.2"
 futures = "^0.3"
 serde = {version = "^1.0.110", features = ["derive"]}
-sqlx = { version = "^0.3", default-features = false, features = [ "runtime-tokio", "macros", "sqlite"]}
+sqlx = { version = "^0.3", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "uuid", "chrono", "time", "json"]}
+dotenv = "^0.15.0"
+juniper = { git = "https://github.com/graphql-rust/juniper", branch = "master" }
+juniper_subscriptions = { git = "https://github.com/graphql-rust/juniper", branch = "master" }
+juniper_warp = { git  = "https://github.com/graphql-rust/juniper", branch = "master" }
+

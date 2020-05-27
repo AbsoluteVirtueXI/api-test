@@ -1,6 +1,7 @@
 //#![deny(warnings)]
 
-//use warp::Filter;
+use warp::Filter;
+
 
 /// Provides a RESTfull web server managing some Todos
 /// API will be:
@@ -10,16 +11,29 @@
 /// - `PUT /todos/:id`: update a specific Todo.
 /// - `DELETE /todos/:id`: delete a specific Todo.
 
+use juniper::{FieldResult, EmptySubscription};
+use std::sync::Arc;
 #[tokio::main]
 async fn main() {
     // Db intialization, i keep the workd blank_db, but this database is not blank anymore
     let db = models::blank_db().await;
 
+
+    let context = warp::any().and(filters::with_db(db.clone())).map(|db: models::Db|
+        gql::Context{pool: db}
+    );
+
+    let graphql_filter = juniper_warp::make_graphql_filter(gql::schema(), context.boxed());
+
     // Define api filter
-    let rest_api = filters::rest_todos(db);
+    let api = filters::todos(db);
+
 
     // Define root of all our routes
-    let routes = rest_api;
+    let routes = api;
+
+
+    let routes = routes.or(warp::path("graphql").and(graphql_filter));
 
     // Start server
     warp::serve(routes).run(([192, 168, 0, 10], 3030)).await;
@@ -31,7 +45,7 @@ mod filters {
     use warp::Filter;
 
     /// The 4 TODOs filters combined.
-    pub fn rest_todos(db: Db,) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    pub fn todos(db: Db,) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
         todos_list(db.clone())
             .or(todos_create(db.clone()))
             .or(todos_update(db.clone()))
@@ -40,7 +54,7 @@ mod filters {
 
     /// GET /todos?offset=3&limit=5
     pub fn todos_list(db: Db) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-        warp::path!("todos")
+        warp::path("todos")
             .and(warp::get())
             .and(warp::query::<ListOptions>())
             .and(with_db(db))
@@ -77,8 +91,9 @@ mod filters {
             .and_then(handlers::delete_todo)
     }
 
+
     /// Make the db accessible within filter
-    fn with_db(db: Db) -> impl Filter<Extract = (Db,), Error = std::convert::Infallible> + Clone {
+    pub fn with_db(db: Db) -> impl Filter<Extract = (Db,), Error = std::convert::Infallible> + Clone {
         warp::any().map(move || db.clone())
     }
 
@@ -141,14 +156,23 @@ mod models {
     pub type Db = PgPool;
 
     #[derive(Debug, Deserialize, Serialize, Clone)] //, sqlx::FromRow
+    #[derive(juniper::GraphQLObject)]
     pub struct Todo {
         pub id: i32,
         pub text: String,
         pub completed: bool
     }
 
+    #[derive(juniper::GraphQLInputObject)]
+    #[graphql(description="A todo list")]
+    pub struct NewTodo {
+        pub text: String,
+        pub completed: bool
+    }
+
     // The query parameters for list_todos.
     #[derive(Debug, Deserialize)]
+    #[derive(juniper::GraphQLInputObject)]
     pub struct ListOptions {
         pub offset: Option<i32>,
         pub limit: Option<i32>,
@@ -186,5 +210,50 @@ mod models {
         let rows = sqlx::query!("DELETE FROM todos WHERE id = $1", id)
             .execute(db).await.unwrap();
         rows
+    }
+}
+
+mod gql {
+    use juniper::{FieldResult, EmptyMutation ,EmptySubscription};
+    use serde::{Deserialize, Serialize};
+    use super::models::{Db, Todo, db_list_todos};
+
+    #[derive(juniper::GraphQLInputObject)]
+    pub struct NewTodo {
+        pub text: String,
+        pub completed: bool
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[derive(juniper::GraphQLInputObject)]
+    pub struct ListOptions {
+        pub offset: Option<i32>,
+        pub limit: Option<i32>,
+    }
+
+    pub struct Context {
+        pub pool: Db
+    }
+
+    impl juniper::Context for Context {}
+
+    pub struct Query;
+
+    #[juniper::graphql_object(Context = Context,)]
+    impl Query {
+        fn apiVersion() -> &str {
+            "1.0"
+        }
+
+        async fn todosList(context: &Context, opt: ListOptions) -> FieldResult<Vec<Todo>> {
+            let res = db_list_todos(opt.offset.unwrap_or(0), opt.limit.unwrap_or(1000), &context.pool).await;
+            Ok(res)
+        }
+    }
+
+    pub type Schema = juniper::RootNode<'static, Query, EmptyMutation<Context>, EmptySubscription<Context>>;
+
+    pub fn schema() -> Schema {
+        Schema::new(Query, EmptyMutation::<Context>::new(), EmptySubscription::<Context>::new())
     }
 }
